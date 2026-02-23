@@ -1,0 +1,13 @@
+services:
+  mcp-server:
+    build: .
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    volumes:
+      - cache-data:/root/.cache/mcp-insta-analytics
+    restart: unless-stopped
+
+volumes:
+  cache-data:

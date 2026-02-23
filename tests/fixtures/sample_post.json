@@ -1,0 +1,19 @@
+{
+    "id": "3001234567890",
+    "shortcode": "CxAbCdEfG",
+    "caption": "Beautiful sunset in Tokyo #sunset #tokyo #photography",
+    "author_id": "987654321",
+    "author_username": "testuser",
+    "created_at": "2025-01-15T10:30:00Z",
+    "like_count": 350,
+    "comment_count": 42,
+    "view_count": 0,
+    "media_type": "image",
+    "is_video": false,
+    "video_url": "",
+    "image_url": "https://instagram.com/p/CxAbCdEfG/media",
+    "location_name": "Tokyo Tower",
+    "hashtags": ["sunset", "tokyo", "photography"],
+    "mentions": [],
+    "media_urls": ["https://instagram.com/p/CxAbCdEfG/media"]
+}
