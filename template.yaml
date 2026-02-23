@@ -1,0 +1,74 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: MCP Instagram Analytics - Lambda Function URL + DynamoDB
+
+Parameters:
+  TableName:
+    Type: String
+    Default: mcp-insta-analytics
+  InstaUsername:
+    Type: String
+    NoEcho: true
+    Default: ""
+  InstaPassword:
+    Type: String
+    NoEcho: true
+    Default: ""
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: python3.12
+
+Resources:
+  # ----- DynamoDB Table (single-table, PROVISIONED for free tier) -----
+  AnalyticsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 25
+        WriteCapacityUnits: 25
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # ----- Lambda Function with Function URL -----
+  McpFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: mcp_insta_analytics.lambda_handler.handler
+      CodeUri: .
+      FunctionUrlConfig:
+        AuthType: NONE
+      Environment:
+        Variables:
+          INSTA_ANALYTICS_STORAGE_BACKEND: dynamodb
+          INSTA_ANALYTICS_DYNAMODB_TABLE_NAME: !Ref TableName
+          INSTA_ANALYTICS_AWS_REGION: !Ref AWS::Region
+          INSTA_ANALYTICS_USERNAME: !Ref InstaUsername
+          INSTA_ANALYTICS_PASSWORD: !Ref InstaPassword
+          INSTA_ANALYTICS_FETCHER_BACKEND: instaloader
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AnalyticsTable
+
+Outputs:
+  FunctionUrl:
+    Description: Lambda Function URL endpoint
+    Value: !GetAtt McpFunctionUrl.FunctionUrl
+  TableName:
+    Description: DynamoDB table name
+    Value: !Ref AnalyticsTable

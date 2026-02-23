@@ -9,10 +9,10 @@ from contextlib import asynccontextmanager
 
 from fastmcp import FastMCP
 
-from mcp_insta_analytics.cache import CacheBackend, SqliteCache
+from mcp_insta_analytics.cache import CacheBackend
 from mcp_insta_analytics.config import Settings
 from mcp_insta_analytics.fetcher import create_fetcher
-from mcp_insta_analytics.rate_limiter import RateLimiterBackend, SqliteRateLimiter
+from mcp_insta_analytics.rate_limiter import RateLimiterBackend
 
 logger = logging.getLogger(__name__)
 
@@ -34,16 +34,40 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[dict[str, object]]:
 
     config = Settings()
 
-    cache: CacheBackend = SqliteCache(config.cache_db_path)
-    await cache.initialize()
+    cache: CacheBackend
+    rate_limiter: RateLimiterBackend
 
-    rl_path = str(cache.db_path.parent / "rate_limiter.db")  # type: ignore[union-attr]
-    rate_limiter: RateLimiterBackend = SqliteRateLimiter(
-        db_path=rl_path,
-        max_per_minute=config.max_requests_per_minute,
-        daily_budget=config.daily_request_budget,
-    )
-    await rate_limiter.initialize()
+    if config.storage_backend == "dynamodb":
+        from mcp_insta_analytics.dynamodb_cache import DynamoDBCache
+        from mcp_insta_analytics.dynamodb_rate_limiter import DynamoDBRateLimiter
+
+        cache = DynamoDBCache(
+            table_name=config.dynamodb_table_name,
+            region=config.aws_region,
+            endpoint_url=config.dynamodb_endpoint_url,
+        )
+        await cache.initialize()
+        rate_limiter = DynamoDBRateLimiter(
+            table_name=config.dynamodb_table_name,
+            region=config.aws_region,
+            endpoint_url=config.dynamodb_endpoint_url,
+            max_per_minute=config.max_requests_per_minute,
+            daily_budget=config.daily_request_budget,
+        )
+        await rate_limiter.initialize()
+    else:
+        from mcp_insta_analytics.cache import SqliteCache
+        from mcp_insta_analytics.rate_limiter import SqliteRateLimiter
+
+        cache = SqliteCache(config.cache_db_path)
+        await cache.initialize()
+        rl_path = str(cache.db_path.parent / "rate_limiter.db")  # type: ignore[union-attr]
+        rate_limiter = SqliteRateLimiter(
+            db_path=rl_path,
+            max_per_minute=config.max_requests_per_minute,
+            daily_budget=config.daily_request_budget,
+        )
+        await rate_limiter.initialize()
 
     # Fetcher — attempt initialization but allow degraded mode on auth failure
     fetcher = create_fetcher(config)

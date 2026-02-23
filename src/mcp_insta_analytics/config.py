@@ -38,8 +38,11 @@ class Settings(BaseSettings):
     # Sentiment analysis
     sentiment_engine: str = "vader"
 
-    # Storage backend
+    # Storage backend: "sqlite" (Docker/local) or "dynamodb" (Lambda)
     storage_backend: str = "sqlite"
+    dynamodb_table_name: str = "mcp-insta-analytics"
+    aws_region: str = "ap-northeast-1"
+    dynamodb_endpoint_url: str = ""  # ローカルDynamoDB用
 
     # Server transport
     server_host: str = "0.0.0.0"
