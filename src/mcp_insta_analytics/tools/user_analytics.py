@@ -119,7 +119,7 @@ async def get_engagement_timeseries(
     deps = extract_deps(ctx)
     from datetime import datetime, timedelta, timezone
 
-    fetch_count = max(100, days_back * 10)
+    fetch_count = min(max(12, days_back * 2), 50)
     await deps.rate_limiter.acquire()
     posts = await deps.fetcher.get_user_posts(username, count=fetch_count)
 
@@ -142,7 +142,7 @@ async def analyze_best_posting_times(
     username: str,
     ctx: Context,
     metric: str = "engagement_rate",
-    sample_size: int = 200,
+    sample_size: int = 50,
     timezone: str = "Asia/Tokyo",
 ) -> BestPostingTimesResult:
     """Analyse the best posting times for a user based on historical engagement."""

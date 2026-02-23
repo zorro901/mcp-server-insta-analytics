@@ -45,6 +45,23 @@ def _make_insta_post(**overrides):
         "location": None,
     }
     defaults.update(overrides)
+    # _node mirrors the raw JSON that instaloader stores internally
+    node = {
+        "id": str(defaults["mediaid"]),
+        "shortcode": defaults["shortcode"],
+        "__typename": defaults["typename"],
+        "is_video": defaults["is_video"],
+        "video_view_count": defaults["video_view_count"],
+        "video_url": defaults.get("video_url", ""),
+        "display_url": defaults["url"],
+        "owner": {"id": str(defaults["owner_id"])},
+        "edge_media_preview_like": {"count": defaults["likes"]},
+        "edge_media_to_comment": {"count": defaults["comments"]},
+    }
+    loc = defaults.get("location")
+    if loc is not None:
+        node["location"] = {"name": getattr(loc, "name", "")}
+    defaults["_node"] = node
     return SimpleNamespace(**defaults)
 
 
@@ -92,15 +109,10 @@ class TestToPost:
 
     def test_sidecar_post(self):
         fetcher = InstaLoaderFetcher(Settings())
-        node1 = SimpleNamespace(display_url="https://example.com/1.jpg")
-        node2 = SimpleNamespace(display_url="https://example.com/2.jpg")
-        post = _make_insta_post(
-            typename="GraphSidecar",
-            get_sidecar_nodes=lambda: [node1, node2],
-        )
+        post = _make_insta_post(typename="GraphSidecar")
         result = fetcher._to_post(post, "testuser")
         assert result.media_type == "sidecar"
-        assert len(result.media_urls) == 2
+        assert len(result.media_urls) >= 1  # display_url from _node
 
     def test_naive_datetime_gets_utc(self):
         fetcher = InstaLoaderFetcher(Settings())

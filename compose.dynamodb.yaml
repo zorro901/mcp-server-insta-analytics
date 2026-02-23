@@ -41,6 +41,8 @@ services:
     depends_on:
       dynamodb-init:
         condition: service_completed_successfully
+    env_file:
+      - .env
     environment:
       INSTA_ANALYTICS_STORAGE_BACKEND: dynamodb
       INSTA_ANALYTICS_DYNAMODB_TABLE_NAME: mcp-insta-analytics

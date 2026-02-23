@@ -73,9 +73,38 @@ class InstaLoaderFetcher(AbstractFetcher):
             save_metadata=False,
             compress_json=False,
             quiet=True,
+            max_connection_attempts=3,
         )
 
-        if self._config.username and self._config.password:
+        if self._config.session_cookie:
+            logger.info("Authenticating with browser session cookie")
+            try:
+                import requests as _requests  # type: ignore[import-untyped]
+
+                session = _requests.Session()
+                session.cookies.set(
+                    "sessionid",
+                    self._config.session_cookie,
+                    domain=".instagram.com",
+                )
+                session.headers.update({
+                    "User-Agent": (
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120.0.0.0 Safari/537.36"
+                    ),
+                    "X-IG-App-ID": "936619743392459",
+                })
+                self._loader.context._session = session
+                if self._config.username:
+                    self._loader.context.username = self._config.username
+                logger.info("Session cookie applied")
+            except Exception as exc:
+                raise AuthenticationError(
+                    f"Failed to apply session cookie: {exc}",
+                    recovery="Check INSTA_ANALYTICS_SESSION_COOKIE in .env.",
+                ) from exc
+        elif self._config.username and self._config.password:
             logger.info("Logging in as %s", self._config.username)
             try:
                 loop = asyncio.get_event_loop()
@@ -106,10 +135,13 @@ class InstaLoaderFetcher(AbstractFetcher):
         assert self._loader is not None, "InstaLoaderFetcher not initialized"
         return self._loader
 
-    async def _run_sync(self, func: partial[Any]) -> Any:
-        """Run a blocking instaloader call in an executor."""
+    async def _run_sync(self, func: partial[Any], timeout: float = 60.0) -> Any:
+        """Run a blocking instaloader call in an executor with timeout."""
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, func)
+        return await asyncio.wait_for(
+            loop.run_in_executor(None, func),
+            timeout=timeout,
+        )
 
     # ------------------------------------------------------------------
     # Abstract method implementations
@@ -143,18 +175,37 @@ class InstaLoaderFetcher(AbstractFetcher):
                 partial(instaloader.Profile.from_username, self._get_loader().context, username)
             )
 
-            posts: list[Post] = []
+            # Shared list so partial results survive timeout/errors
+            collected: list[Post] = []
 
             def _collect_posts() -> list[Post]:
-                collected: list[Post] = []
-                for p in profile.get_posts():
-                    collected.append(self._to_post(p, username))
-                    if len(collected) >= count:
-                        break
+                try:
+                    for p in profile.get_posts():
+                        collected.append(self._to_post(p, username))
+                        if len(collected) >= count:
+                            break
+                except Exception:
+                    if collected:
+                        logger.warning(
+                            "Pagination stopped after %d posts for @%s",
+                            len(collected), username,
+                        )
+                    else:
+                        raise
                 return collected
 
-            posts = await self._run_sync(partial(_collect_posts))
-            return posts
+            try:
+                await self._run_sync(partial(_collect_posts))
+            except (TimeoutError, asyncio.TimeoutError):
+                if collected:
+                    logger.warning(
+                        "Timeout after %d posts for @%s", len(collected), username,
+                    )
+                else:
+                    raise FetcherError(
+                        f"Timed out fetching posts for @{username}"
+                    )
+            return collected
         except (AuthenticationError, FetcherError):
             raise
         except Exception as exc:
@@ -197,11 +248,15 @@ class InstaLoaderFetcher(AbstractFetcher):
             def _collect_comments() -> list[Comment]:
                 collected: list[Comment] = []
                 for c in post.get_comments():
+                    owner = getattr(c, "owner", None)
+                    if owner is not None and not isinstance(owner, str):
+                        owner = getattr(owner, "username", str(owner))
+                    author = owner or getattr(c, "username", "") or ""
                     collected.append(
                         Comment(
                             id=str(getattr(c, "id", "")),
                             text=getattr(c, "text", "") or "",
-                            author_username=getattr(c, "owner", getattr(c, "username", "")) or "",
+                            author_username=str(author),
                             created_at=getattr(c, "created_at_utc", None),
                             like_count=getattr(c, "likes_count", 0) or 0,
                         )
@@ -233,11 +288,20 @@ class InstaLoaderFetcher(AbstractFetcher):
 
             def _collect_hashtag_posts() -> list[Post]:
                 collected: list[Post] = []
-                for p in loader.get_hashtag_posts(tag):
-                    owner = getattr(p, "owner_username", "") or ""
-                    collected.append(self._to_post(p, owner))
-                    if len(collected) >= count:
-                        break
+                try:
+                    for p in loader.get_hashtag_posts(tag):
+                        owner = getattr(p, "owner_username", "") or ""
+                        collected.append(self._to_post(p, owner))
+                        if len(collected) >= count:
+                            break
+                except Exception:
+                    if collected:
+                        logger.warning(
+                            "Pagination stopped after %d posts for #%s",
+                            len(collected), tag,
+                        )
+                    else:
+                        raise
                 return collected
 
             return await self._run_sync(partial(_collect_hashtag_posts))
@@ -275,7 +339,14 @@ class InstaLoaderFetcher(AbstractFetcher):
         )
 
     def _to_post(self, post: Any, author_username: str) -> Post:
-        """Convert an instaloader Post to our Post model."""
+        """Convert an instaloader Post to our Post model.
+
+        Uses ``post._node`` (the raw JSON dict) where possible to avoid
+        triggering additional GraphQL API requests that instaloader makes
+        lazily when accessing certain properties.
+        """
+        node: dict[str, Any] = getattr(post, "_node", None) or {}
+
         created_at = getattr(post, "date_utc", None)
         if created_at is not None and created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
@@ -284,8 +355,8 @@ class InstaLoaderFetcher(AbstractFetcher):
         hashtags = list(getattr(post, "caption_hashtags", []) or [])
         mentions = list(getattr(post, "caption_mentions", []) or [])
 
-        is_video = getattr(post, "is_video", False)
-        typename = getattr(post, "typename", "GraphImage")
+        is_video = node.get("is_video", False)
+        typename = node.get("__typename", "GraphImage")
         if typename == "GraphSidecar":
             media_type = "sidecar"
         elif is_video:
@@ -293,43 +364,52 @@ class InstaLoaderFetcher(AbstractFetcher):
         else:
             media_type = "image"
 
-        media_urls: list[str] = []
-        if typename == "GraphSidecar":
-            try:
-                for node in getattr(post, "get_sidecar_nodes", lambda: [])():
-                    url = getattr(node, "display_url", "") or ""
-                    if url:
-                        media_urls.append(url)
-            except Exception:
-                pass
-        if not media_urls:
-            display_url = getattr(post, "url", "") or ""
-            if display_url:
-                media_urls.append(display_url)
+        # Read media URLs from node to avoid extra API calls
+        display_url = node.get("display_url", "") or ""
+        media_urls: list[str] = [display_url] if display_url else []
 
         return Post(
-            id=str(getattr(post, "mediaid", "")),
-            shortcode=getattr(post, "shortcode", "") or "",
+            id=str(node.get("id", getattr(post, "mediaid", ""))),
+            shortcode=node.get("shortcode", "") or "",
             caption=caption,
-            author_id=str(getattr(post, "owner_id", "") or ""),
+            author_id=str(node.get("owner", {}).get("id", "") if isinstance(node.get("owner"), dict) else getattr(post, "owner_id", "") or ""),
             author_username=author_username,
             created_at=created_at,
-            like_count=getattr(post, "likes", 0) or 0,
-            comment_count=getattr(post, "comments", 0) or 0,
-            view_count=getattr(post, "video_view_count", 0) or 0,
+            like_count=node.get("edge_media_preview_like", {}).get("count", 0) or getattr(post, "likes", 0) or 0,
+            comment_count=node.get("edge_media_to_comment", {}).get("count", 0) or getattr(post, "comments", 0) or 0,
+            view_count=node.get("video_view_count", 0) or 0,
             media_type=media_type,
             is_video=is_video,
-            video_url=getattr(post, "video_url", "") or "",
-            image_url=getattr(post, "url", "") or "",
+            video_url=node.get("video_url", "") or "",
+            image_url=display_url,
             location_name=self._extract_location(post),
             hashtags=hashtags,
             mentions=mentions,
             media_urls=media_urls,
         )
 
+    @staticmethod
+    def _safe_attr(obj: Any, name: str, default: str = "") -> str:
+        """Get attribute without triggering extra API calls on failure."""
+        try:
+            val = getattr(obj, name, default)
+            return val or default
+        except Exception:
+            return default
+
     def _extract_location(self, post: Any) -> str:
-        """Extract location name from an instaloader Post."""
-        loc = getattr(post, "location", None)
-        if loc is None:
+        """Extract location name from an instaloader Post.
+
+        Accessing ``post.location`` triggers an extra GraphQL request in
+        instaloader which often fails with 403 and enters an internal retry
+        loop.  We read the location only from the already-fetched JSON node
+        to avoid additional API calls.
+        """
+        try:
+            node = getattr(post, "_node", None) or {}
+            loc = node.get("location") if isinstance(node, dict) else None
+            if loc is None:
+                return ""
+            return loc.get("name", "") or ""
+        except Exception:
             return ""
-        return getattr(loc, "name", "") or ""
