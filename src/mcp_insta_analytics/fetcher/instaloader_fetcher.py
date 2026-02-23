@@ -91,8 +91,6 @@ class InstaLoaderFetcher(AbstractFetcher):
                     "X-IG-App-ID": "936619743392459",
                 })
                 self._loader.context._session = session
-                if self._config.username:
-                    self._loader.context.username = self._config.username
                 logger.info("Session cookie applied")
             except Exception as exc:
                 raise AuthenticationError(

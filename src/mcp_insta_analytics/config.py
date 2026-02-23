@@ -16,7 +16,6 @@ class Settings(BaseSettings):
     )
 
     # Instagram authentication (optional — public profiles work without login)
-    username: str = ""
     session_cookie: str = ""  # Browser sessionid cookie
 
     # Fetcher backend
