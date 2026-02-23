@@ -17,8 +17,7 @@ class Settings(BaseSettings):
 
     # Instagram authentication (optional — public profiles work without login)
     username: str = ""
-    password: str = ""
-    session_cookie: str = ""  # Browser sessionid cookie (preferred over password login)
+    session_cookie: str = ""  # Browser sessionid cookie
 
     # Fetcher backend
     fetcher_backend: str = "instaloader"

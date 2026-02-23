@@ -17,11 +17,6 @@ from .base import AbstractFetcher
 logger = logging.getLogger(__name__)
 
 
-_LOGIN_RECOVERY = (
-    "Check INSTA_ANALYTICS_USERNAME and INSTA_ANALYTICS_PASSWORD in .env. "
-    "If using 2FA, you may need to approve the login from the Instagram app."
-)
-
 _SESSION_RECOVERY = (
     "Instagram session may have expired or been invalidated. "
     "Restart the server to create a new session."
@@ -103,24 +98,6 @@ class InstaLoaderFetcher(AbstractFetcher):
                 raise AuthenticationError(
                     f"Failed to apply session cookie: {exc}",
                     recovery="Check INSTA_ANALYTICS_SESSION_COOKIE in .env.",
-                ) from exc
-        elif self._config.username and self._config.password:
-            logger.info("Logging in as %s", self._config.username)
-            try:
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(
-                    None,
-                    partial(
-                        self._loader.login,
-                        self._config.username,
-                        self._config.password,
-                    ),
-                )
-                logger.info("Login successful")
-            except Exception as exc:
-                raise AuthenticationError(
-                    f"Instagram login failed: {exc}",
-                    recovery=_LOGIN_RECOVERY,
                 ) from exc
         else:
             logger.info("Running in public-only mode (no login credentials)")
