@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import timezone
 from functools import partial
 from typing import Any
+from urllib.parse import unquote
 
 from mcp_insta_analytics.config import Settings
 from mcp_insta_analytics.errors import AuthenticationError, FetcherError
@@ -15,6 +17,11 @@ from mcp_insta_analytics.models import Comment, Post, UserProfile
 from .base import AbstractFetcher
 
 logger = logging.getLogger(__name__)
+
+# TTL for in-memory caches (seconds).  Short enough to stay fresh, long
+# enough to avoid duplicate requests within a single tool invocation chain.
+_PROFILE_CACHE_TTL = 120
+_RAW_POST_CACHE_TTL = 120
 
 
 _SESSION_RECOVERY = (
@@ -42,12 +49,20 @@ def _is_auth_error(exc: Exception) -> bool:
 
 
 class InstaLoaderFetcher(AbstractFetcher):
-    """Fetcher that uses instaloader to interact with Instagram."""
+    """Fetcher that uses instaloader to interact with Instagram.
+
+    Maintains short-lived in-memory caches for instaloader Profile and raw
+    Post objects to avoid duplicate GraphQL requests when multiple MCP tools
+    operate on the same user or post within a short window.
+    """
 
     def __init__(self, config: Settings) -> None:
         self._config = config
         self._loader: Any = None
         self._initialized = False
+        # In-memory caches: {key: (value, expiry_timestamp)}
+        self._profile_cache: dict[str, tuple[Any, float]] = {}
+        self._raw_post_cache: dict[str, tuple[Any, float]] = {}
 
     async def initialize(self) -> None:
         """Initialize instaloader and optionally log in."""
@@ -77,9 +92,11 @@ class InstaLoaderFetcher(AbstractFetcher):
                 import requests as _requests  # type: ignore[import-untyped]
 
                 session = _requests.Session()
+                # Cookie may be URL-encoded when copied from browser DevTools
+                cookie_value = unquote(self._config.session_cookie)
                 session.cookies.set(
                     "sessionid",
-                    self._config.session_cookie,
+                    cookie_value,
                     domain=".instagram.com",
                 )
                 session.headers.update({
@@ -119,17 +136,57 @@ class InstaLoaderFetcher(AbstractFetcher):
         )
 
     # ------------------------------------------------------------------
+    # In-memory object caches (avoid duplicate GraphQL requests)
+    # ------------------------------------------------------------------
+
+    async def _get_profile(self, username: str) -> Any:
+        """Return an instaloader Profile, reusing a cached copy if fresh."""
+        now = time.monotonic()
+        cached = self._profile_cache.get(username)
+        if cached is not None:
+            value, expiry = cached
+            if now < expiry:
+                logger.debug("Profile cache hit for @%s", username)
+                return value
+
+        import instaloader  # type: ignore[import-untyped]
+
+        profile = await self._run_sync(
+            partial(instaloader.Profile.from_username, self._get_loader().context, username)
+        )
+        self._profile_cache[username] = (profile, now + _PROFILE_CACHE_TTL)
+        return profile
+
+    def _cache_raw_post(self, shortcode: str, raw_post: Any) -> None:
+        """Store a raw instaloader Post object for later reuse."""
+        self._raw_post_cache[shortcode] = (raw_post, time.monotonic() + _RAW_POST_CACHE_TTL)
+
+    async def _get_raw_post(self, shortcode: str) -> Any:
+        """Return a raw instaloader Post, reusing a cached copy if fresh."""
+        now = time.monotonic()
+        cached = self._raw_post_cache.get(shortcode)
+        if cached is not None:
+            value, expiry = cached
+            if now < expiry:
+                logger.debug("Raw post cache hit for %s", shortcode)
+                return value
+
+        import instaloader  # type: ignore[import-untyped]
+
+        raw_post = await self._run_sync(
+            partial(instaloader.Post.from_shortcode, self._get_loader().context, shortcode)
+        )
+        self._raw_post_cache[shortcode] = (raw_post, now + _RAW_POST_CACHE_TTL)
+        return raw_post
+
+    # ------------------------------------------------------------------
     # Abstract method implementations
     # ------------------------------------------------------------------
 
     async def get_user_profile(self, username: str) -> UserProfile:
         await self._ensure_initialized()
         try:
-            import instaloader  # type: ignore[import-untyped]
-
-            profile = await self._run_sync(
-                partial(instaloader.Profile.from_username, self._get_loader().context, username)
-            )
+            profile = await self._get_profile(username)
             return self._to_user_profile(profile)
         except (AuthenticationError, FetcherError):
             raise
@@ -144,11 +201,7 @@ class InstaLoaderFetcher(AbstractFetcher):
     async def get_user_posts(self, username: str, count: int = 20) -> list[Post]:
         await self._ensure_initialized()
         try:
-            import instaloader  # type: ignore[import-untyped]
-
-            profile = await self._run_sync(
-                partial(instaloader.Profile.from_username, self._get_loader().context, username)
-            )
+            profile = await self._get_profile(username)
 
             # Shared list so partial results survive timeout/errors
             collected: list[Post] = []
@@ -156,6 +209,9 @@ class InstaLoaderFetcher(AbstractFetcher):
             def _collect_posts() -> list[Post]:
                 try:
                     for p in profile.get_posts():
+                        sc = getattr(p, "shortcode", None)
+                        if sc:
+                            self._cache_raw_post(sc, p)
                         collected.append(self._to_post(p, username))
                         if len(collected) >= count:
                             break
@@ -194,11 +250,7 @@ class InstaLoaderFetcher(AbstractFetcher):
     async def get_post_detail(self, shortcode: str) -> Post:
         await self._ensure_initialized()
         try:
-            import instaloader  # type: ignore[import-untyped]
-
-            post = await self._run_sync(
-                partial(instaloader.Post.from_shortcode, self._get_loader().context, shortcode)
-            )
+            post = await self._get_raw_post(shortcode)
             owner = getattr(post, "owner_username", "") or ""
             return self._to_post(post, owner)
         except (AuthenticationError, FetcherError):
@@ -214,11 +266,7 @@ class InstaLoaderFetcher(AbstractFetcher):
     async def get_post_comments(self, shortcode: str, count: int = 50) -> list[Comment]:
         await self._ensure_initialized()
         try:
-            import instaloader  # type: ignore[import-untyped]
-
-            post = await self._run_sync(
-                partial(instaloader.Post.from_shortcode, self._get_loader().context, shortcode)
-            )
+            post = await self._get_raw_post(shortcode)
 
             def _collect_comments() -> list[Comment]:
                 collected: list[Comment] = []
@@ -291,6 +339,8 @@ class InstaLoaderFetcher(AbstractFetcher):
     async def close(self) -> None:
         self._loader = None
         self._initialized = False
+        self._profile_cache.clear()
+        self._raw_post_cache.clear()
 
     # ------------------------------------------------------------------
     # Mapping helpers

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 from fastmcp import Context
 
 from mcp_insta_analytics.analysis.sentiment import create_analyzer
 from mcp_insta_analytics.models import (
+    Comment,
     CommentThreadResult,
     IndividualSentiments,
     SentimentAnalysisResult,
@@ -15,6 +17,29 @@ from mcp_insta_analytics.models import (
 from mcp_insta_analytics.tools import extract_deps
 
 logger = logging.getLogger(__name__)
+
+
+async def _fetch_comments_with_cache(
+    shortcode: str,
+    count: int,
+    deps: object,
+) -> list[Comment]:
+    """Fetch comments, reusing cached results if available."""
+    cache_key = f"comments:{shortcode}:{count}"
+    cached = await deps.cache.get(cache_key)  # type: ignore[union-attr]
+    if cached is not None:
+        logger.debug("Comment cache hit for %s", shortcode)
+        return [Comment(**c) for c in json.loads(cached)]
+
+    await deps.rate_limiter.acquire()  # type: ignore[union-attr]
+    comments = await deps.fetcher.get_post_comments(shortcode, count=count)  # type: ignore[union-attr]
+
+    await deps.cache.set(  # type: ignore[union-attr]
+        cache_key,
+        json.dumps([c.model_dump(mode="json") for c in comments]),
+        ttl=deps.config.cache_ttl_posts,  # type: ignore[union-attr]
+    )
+    return comments
 
 
 async def get_post_comments(
@@ -25,8 +50,7 @@ async def get_post_comments(
     """Fetch comments for a specific post."""
     deps = extract_deps(ctx)
 
-    await deps.rate_limiter.acquire()
-    comments = await deps.fetcher.get_post_comments(shortcode, count=max_results)
+    comments = await _fetch_comments_with_cache(shortcode, max_results, deps)
 
     return CommentThreadResult(
         post_id=shortcode,
@@ -44,8 +68,7 @@ async def analyze_comment_sentiment(
     """Analyze the sentiment of comments on a given post."""
     deps = extract_deps(ctx)
 
-    await deps.rate_limiter.acquire()
-    comments = await deps.fetcher.get_post_comments(shortcode, count=max_comments)
+    comments = await _fetch_comments_with_cache(shortcode, max_comments, deps)
 
     texts = [c.text for c in comments if c.text.strip()]
 

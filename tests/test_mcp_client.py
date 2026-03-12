@@ -13,7 +13,6 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
-import pytest
 from fastmcp import Client, FastMCP
 
 from mcp_insta_analytics.cache import SqliteCache

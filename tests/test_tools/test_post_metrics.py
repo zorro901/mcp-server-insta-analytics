@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 
 from mcp_insta_analytics.models import Post
 from mcp_insta_analytics.tools.post_metrics import compare_post_performance, get_post_metrics

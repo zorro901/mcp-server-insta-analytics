@@ -10,11 +10,15 @@ from mcp_insta_analytics.tools.comments import analyze_comment_sentiment, get_po
 
 def _make_ctx(fetcher: AsyncMock) -> MagicMock:
     ctx = MagicMock()
+    cache = AsyncMock()
+    cache.get.return_value = None  # No cached comments
+    config = MagicMock()
+    config.cache_ttl_posts = 900
     ctx.lifespan_context = {
         "fetcher": fetcher,
-        "cache": AsyncMock(),
+        "cache": cache,
         "rate_limiter": AsyncMock(),
-        "config": MagicMock(),
+        "config": config,
     }
     return ctx
 
