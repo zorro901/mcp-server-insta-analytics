@@ -66,8 +66,6 @@ def sample_comments(sample_comments_data):
 def test_config():
     return Settings(
         fetcher_backend="instaloader",
-        username="",
-        password="",
         cache_db_path="/tmp/test-insta-analytics-cache.db",
         cache_ttl_posts=300,
         cache_ttl_profiles=600,

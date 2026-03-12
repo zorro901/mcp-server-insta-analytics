@@ -9,4 +9,6 @@ dist/
 *.db
 cookies.json
 .DS_Store
-summer_of_85
+.build/
+.mcp.json
+requirements-lambda.txt

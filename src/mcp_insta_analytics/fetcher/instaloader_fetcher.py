@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import timezone
 from functools import partial
 from typing import Any
 
@@ -257,8 +257,6 @@ class InstaLoaderFetcher(AbstractFetcher):
         await self._ensure_initialized()
         tag = hashtag.lstrip("#")
         try:
-            import instaloader  # type: ignore[import-untyped]
-
             loader = self._get_loader()
 
             def _collect_hashtag_posts() -> list[Post]:

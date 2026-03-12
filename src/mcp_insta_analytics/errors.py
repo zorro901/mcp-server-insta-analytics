@@ -25,8 +25,8 @@ class AuthenticationError(InstaAnalyticsError):
             message,
             recovery=recovery
             or (
-                "Check INSTA_ANALYTICS_USERNAME and INSTA_ANALYTICS_PASSWORD in .env, "
-                "or remove them to use public-only mode."
+                "Check INSTA_ANALYTICS_SESSION_COOKIE in .env, "
+                "or remove it to use public-only mode."
             ),
         )
 

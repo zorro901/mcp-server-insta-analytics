@@ -1,32 +1,26 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Transform: AWS::Serverless-2016-10-31
-Description: MCP Instagram Analytics - Lambda Function URL + DynamoDB
+Description: >-
+  MCP Instagram Analytics — Lambda Function URL + DynamoDB.
+  All resources are within AWS always-free tier (no 12-month-limited resources).
 
 Parameters:
-  TableName:
-    Type: String
-    Default: mcp-insta-analytics
-  InstaUsername:
+  SessionCookie:
     Type: String
     NoEcho: true
     Default: ""
-  InstaPassword:
+    Description: Instagram browser sessionid cookie (optional)
+  ApiKey:
     Type: String
     NoEcho: true
     Default: ""
-
-Globals:
-  Function:
-    Timeout: 30
-    MemorySize: 256
-    Runtime: python3.12
+    Description: Bearer token for Function URL access protection
 
 Resources:
-  # ----- DynamoDB Table (single-table, PROVISIONED for free tier) -----
+  # ----- DynamoDB Table (PROVISIONED 25/25 = always-free tier max) -----
   AnalyticsTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Ref TableName
+      TableName: mcp-insta-analytics
       BillingMode: PROVISIONED
       ProvisionedThroughput:
         ReadCapacityUnits: 25
@@ -45,25 +39,85 @@ Resources:
         AttributeName: ttl
         Enabled: true
 
-  # ----- Lambda Function with Function URL -----
-  McpFunction:
-    Type: AWS::Serverless::Function
+  # ----- IAM Role for Lambda -----
+  McpFunctionRole:
+    Type: AWS::IAM::Role
     Properties:
+      RoleName: mcp-insta-analytics-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:DescribeTable
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource: !GetAtt AnalyticsTable.Arn
+
+  # ----- CloudWatch Log Group (1-week retention to stay under 5GB free) -----
+  McpFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/mcp-insta-analytics
+      RetentionInDays: 7
+
+  # ----- Lambda Function -----
+  McpFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: McpFunctionLogGroup
+    Properties:
+      FunctionName: mcp-insta-analytics
+      Runtime: python3.12
       Handler: mcp_insta_analytics.lambda_handler.handler
-      CodeUri: .
-      FunctionUrlConfig:
-        AuthType: NONE
+      Role: !GetAtt McpFunctionRole.Arn
+      MemorySize: 256
+      Timeout: 30
+      ReservedConcurrentExecutions: 10
+      LoggingConfig:
+        LogGroup: /aws/lambda/mcp-insta-analytics
       Environment:
         Variables:
           INSTA_ANALYTICS_STORAGE_BACKEND: dynamodb
-          INSTA_ANALYTICS_DYNAMODB_TABLE_NAME: !Ref TableName
+          INSTA_ANALYTICS_DYNAMODB_TABLE_NAME: mcp-insta-analytics
           INSTA_ANALYTICS_AWS_REGION: !Ref AWS::Region
-          INSTA_ANALYTICS_USERNAME: !Ref InstaUsername
-          INSTA_ANALYTICS_PASSWORD: !Ref InstaPassword
           INSTA_ANALYTICS_FETCHER_BACKEND: instaloader
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref AnalyticsTable
+          INSTA_ANALYTICS_SESSION_COOKIE: !Ref SessionCookie
+          INSTA_ANALYTICS_API_KEY: !Ref ApiKey
+      # Placeholder — replaced by deploy.sh with actual zip
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {"statusCode": 200, "body": "placeholder"}
+
+  # ----- Function URL (NONE + app-layer Bearer token check) -----
+  McpFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      AuthType: NONE
+      TargetFunctionArn: !GetAtt McpFunction.Arn
+
+  McpFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunctionUrl
+      FunctionName: !GetAtt McpFunction.Arn
+      FunctionUrlAuthType: NONE
+      Principal: "*"
 
 Outputs:
   FunctionUrl:

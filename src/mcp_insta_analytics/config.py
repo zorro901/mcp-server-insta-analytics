@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     aws_region: str = "ap-northeast-1"
     dynamodb_endpoint_url: str = ""  # ローカルDynamoDB用
 
+    # Lambda Function URL access protection (Bearer token)
+    api_key: str = ""
+
     # Server transport
     server_host: str = "0.0.0.0"
     server_port: int = 8001
