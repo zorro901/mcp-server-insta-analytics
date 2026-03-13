@@ -56,7 +56,7 @@ async def get_user_profile_analytics(username: str, ctx: Context) -> UserProfile
 
 async def get_user_timeline_metrics(
     username: str,
-    max_results: int = 20,
+    max_results: int = 12,
     ctx: Context = None,  # type: ignore[assignment]
 ) -> UserTimelineResult:
     """Fetch recent posts and compute per-post engagement metrics plus summary."""
@@ -119,7 +119,7 @@ async def get_engagement_timeseries(
     deps = extract_deps(ctx)
     from datetime import datetime, timedelta, timezone
 
-    fetch_count = min(max(12, days_back * 2), 50)
+    fetch_count = min(max(12, days_back * 2), 12)
     await deps.rate_limiter.acquire()
     posts = await deps.fetcher.get_user_posts(username, count=fetch_count)
 
@@ -142,7 +142,7 @@ async def analyze_best_posting_times(
     username: str,
     ctx: Context,
     metric: str = "engagement_rate",
-    sample_size: int = 50,
+    sample_size: int = 12,
     timezone: str = "Asia/Tokyo",
 ) -> BestPostingTimesResult:
     """Analyse the best posting times for a user based on historical engagement."""

@@ -5,8 +5,10 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import aiosqlite
+if TYPE_CHECKING:
+    import aiosqlite
 
 from mcp_insta_analytics.errors import BudgetExhaustedError, RateLimitError
 from mcp_insta_analytics.models import UsageStats
@@ -41,6 +43,9 @@ class SqliteRateLimiter(RateLimiterBackend):
         max_per_minute: int = 15,
         daily_budget: int = 500,
     ) -> None:
+        import aiosqlite as _aiosqlite  # noqa: F811
+
+        self._aiosqlite = _aiosqlite
         self._db_path = Path(db_path).expanduser()
         self._max_per_minute = max_per_minute
         self._daily_budget = daily_budget
@@ -48,7 +53,7 @@ class SqliteRateLimiter(RateLimiterBackend):
 
     async def initialize(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = await aiosqlite.connect(str(self._db_path))
+        self._db = await self._aiosqlite.connect(str(self._db_path))
         await self._db.execute(
             "CREATE TABLE IF NOT EXISTS request_log "
             "(id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp REAL)"

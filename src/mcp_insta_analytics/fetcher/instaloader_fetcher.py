@@ -91,9 +91,10 @@ class InstaLoaderFetcher(AbstractFetcher):
             try:
                 import requests as _requests  # type: ignore[import-untyped]
 
-                session = _requests.Session()
                 # Cookie may be URL-encoded when copied from browser DevTools
                 cookie_value = unquote(self._config.session_cookie)
+
+                session = _requests.Session()
                 session.cookies.set(
                     "sessionid",
                     cookie_value,
@@ -108,7 +109,18 @@ class InstaLoaderFetcher(AbstractFetcher):
                     "X-IG-App-ID": "936619743392459",
                 })
                 self._loader.context._session = session
-                logger.info("Session cookie applied")
+
+                # Verify session and set username so instaloader treats us
+                # as logged-in (required for comments, likes, etc.).
+                username = self._loader.test_login()
+                if username:
+                    self._loader.context.username = username
+                    logger.info("Authenticated as @%s", username)
+                else:
+                    logger.warning(
+                        "Session cookie set but test_login failed — "
+                        "running in public-only mode"
+                    )
             except Exception as exc:
                 raise AuthenticationError(
                     f"Failed to apply session cookie: {exc}",
