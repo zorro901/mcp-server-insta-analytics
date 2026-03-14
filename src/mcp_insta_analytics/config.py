@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     aws_region: str = "ap-northeast-1"
     dynamodb_endpoint_url: str = ""  # ローカルDynamoDB用
 
-    # Lambda Function URL access protection (Bearer token)
+    # Bearer token for HTTP access protection (used by both Lambda and Docker)
     api_key: str = ""
 
     # Server transport
