@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -15,6 +17,8 @@ from botocore.exceptions import ClientError
 from mcp_insta_analytics.errors import BudgetExhaustedError, RateLimitError
 from mcp_insta_analytics.models import UsageStats
 from mcp_insta_analytics.rate_limiter import RateLimiterBackend
+
+logger = logging.getLogger(__name__)
 
 _SECONDS_PER_MINUTE = 60
 
@@ -35,12 +39,15 @@ class DynamoDBRateLimiter(RateLimiterBackend):
         endpoint_url: str = "",
         max_per_minute: int = 15,
         daily_budget: int = 500,
+        request_delay: float = 4.0,
     ) -> None:
         self._table_name = table_name
         self._region = region
         self._endpoint_url = endpoint_url
         self._max_per_minute = max_per_minute
         self._daily_budget = daily_budget
+        self._request_delay = request_delay
+        self._last_request_time: float = 0.0
         self._table: Any = None
 
     async def initialize(self) -> None:
@@ -59,6 +66,14 @@ class DynamoDBRateLimiter(RateLimiterBackend):
         """Record a request if within limits, otherwise raise."""
         if self._table is None:
             raise RateLimitError()
+
+        # --- Enforce minimum inter-request delay ---
+        if self._request_delay > 0:
+            elapsed = time.time() - self._last_request_time
+            wait = self._request_delay - elapsed
+            if wait > 0:
+                logger.debug("Rate limiter: sleeping %.1fs before next request", wait)
+                await asyncio.sleep(wait)
 
         now = datetime.now(tz=UTC)
         minute_key = now.strftime("%Y-%m-%dT%H:%M")
@@ -106,6 +121,8 @@ class DynamoDBRateLimiter(RateLimiterBackend):
                     remaining_daily=None,
                 ) from exc
             raise
+
+        self._last_request_time = time.time()
 
     async def get_usage(self) -> UsageStats:
         """Return current usage statistics by reading counters."""

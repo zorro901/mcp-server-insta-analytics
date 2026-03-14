@@ -53,6 +53,7 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[dict[str, object]]:
             endpoint_url=config.dynamodb_endpoint_url,
             max_per_minute=config.max_requests_per_minute,
             daily_budget=config.daily_request_budget,
+            request_delay=config.request_delay,
         )
         await rate_limiter.initialize()
     else:
@@ -66,6 +67,7 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[dict[str, object]]:
             db_path=rl_path,
             max_per_minute=config.max_requests_per_minute,
             daily_budget=config.daily_request_budget,
+            request_delay=config.request_delay,
         )
         await rate_limiter.initialize()
 

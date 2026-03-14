@@ -21,18 +21,20 @@ class Settings(BaseSettings):
     # Fetcher backend
     fetcher_backend: str = "instaloader"
 
-    # Request delay between API calls (seconds)
-    request_delay: float = 4.0
+    # Request delay between API calls (seconds).
+    # Instagram aggressively rate-limits GraphQL requests; values below 5s
+    # frequently trigger 403 responses.
+    request_delay: float = 6.0
 
     # Cache settings
     cache_db_path: str = "~/.cache/mcp-insta-analytics/cache.db"
-    cache_ttl_posts: int = 900  # 15 minutes
+    cache_ttl_posts: int = 1800  # 30 minutes
     cache_ttl_profiles: int = 86400  # 24 hours
-    cache_ttl_search: int = 600  # 10 minutes
+    cache_ttl_search: int = 1800  # 30 minutes
 
     # Rate limiting
-    max_requests_per_minute: int = 15
-    daily_request_budget: int = 500
+    max_requests_per_minute: int = 6
+    daily_request_budget: int = 200
 
     # Sentiment analysis
     sentiment_engine: str = "vader"

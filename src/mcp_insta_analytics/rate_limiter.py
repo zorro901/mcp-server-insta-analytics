@@ -1,7 +1,13 @@
-"""Token-bucket rate limiter with per-minute and daily limits."""
+"""Token-bucket rate limiter with per-minute and daily limits.
+
+Enforces a minimum delay between requests (``request_delay``) to avoid
+triggering Instagram's aggressive rate limiting on the GraphQL API.
+"""
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -12,6 +18,8 @@ if TYPE_CHECKING:
 
 from mcp_insta_analytics.errors import BudgetExhaustedError, RateLimitError
 from mcp_insta_analytics.models import UsageStats
+
+logger = logging.getLogger(__name__)
 
 
 class RateLimiterBackend(ABC):
@@ -35,13 +43,19 @@ _SECONDS_PER_DAY = 86400
 
 
 class SqliteRateLimiter(RateLimiterBackend):
-    """Persistent rate limiter using aiosqlite to track request timestamps."""
+    """Persistent rate limiter using aiosqlite to track request timestamps.
+
+    In addition to per-minute and daily budget checks, enforces a minimum
+    inter-request delay (``request_delay`` seconds) by sleeping until enough
+    time has elapsed since the last recorded request.
+    """
 
     def __init__(
         self,
         db_path: str,
         max_per_minute: int = 15,
         daily_budget: int = 500,
+        request_delay: float = 4.0,
     ) -> None:
         import aiosqlite as _aiosqlite  # noqa: F811
 
@@ -49,6 +63,7 @@ class SqliteRateLimiter(RateLimiterBackend):
         self._db_path = Path(db_path).expanduser()
         self._max_per_minute = max_per_minute
         self._daily_budget = daily_budget
+        self._request_delay = request_delay
         self._db: aiosqlite.Connection | None = None
 
     async def initialize(self) -> None:
@@ -78,9 +93,22 @@ class SqliteRateLimiter(RateLimiterBackend):
             return 0
         return int(row[0])
 
+    async def _last_request_timestamp(self) -> float | None:
+        """Return the timestamp of the most recent request, or None."""
+        assert self._db is not None
+        async with self._db.execute(
+            "SELECT MAX(timestamp) FROM request_log"
+        ) as cursor:
+            row = await cursor.fetchone()  # type: ignore[misc]
+        if row is None or row[0] is None:
+            return None
+        return float(row[0])
+
     async def acquire(self) -> None:
         assert self._db is not None, "RateLimiter not initialized"
         now = time.time()
+
+        # --- Budget checks (fail-fast) ---
         requests_today = await self._count_since(now - _SECONDS_PER_DAY)
         if requests_today >= self._daily_budget:
             raise BudgetExhaustedError(daily_limit=self._daily_budget)
@@ -91,7 +119,20 @@ class SqliteRateLimiter(RateLimiterBackend):
                 retry_after_seconds=_SECONDS_PER_MINUTE,
                 remaining_daily=remaining_daily,
             )
-        await self._db.execute("INSERT INTO request_log (timestamp) VALUES (?)", (now,))
+
+        # --- Enforce minimum inter-request delay ---
+        if self._request_delay > 0:
+            last_ts = await self._last_request_timestamp()
+            if last_ts is not None:
+                elapsed = time.time() - last_ts
+                wait = self._request_delay - elapsed
+                if wait > 0:
+                    logger.debug("Rate limiter: sleeping %.1fs before next request", wait)
+                    await asyncio.sleep(wait)
+
+        await self._db.execute(
+            "INSERT INTO request_log (timestamp) VALUES (?)", (time.time(),)
+        )
         await self._db.commit()
 
     async def get_usage(self) -> UsageStats:

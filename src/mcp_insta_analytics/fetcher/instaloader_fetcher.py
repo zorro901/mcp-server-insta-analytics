@@ -83,7 +83,7 @@ class InstaLoaderFetcher(AbstractFetcher):
             save_metadata=False,
             compress_json=False,
             quiet=True,
-            max_connection_attempts=3,
+            max_connection_attempts=1,
         )
 
         if self._config.session_cookie:
