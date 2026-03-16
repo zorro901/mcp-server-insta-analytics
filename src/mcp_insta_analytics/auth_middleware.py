@@ -13,6 +13,8 @@ class BearerAuthMiddleware:
     """Reject requests that lack a valid ``Authorization: Bearer <token>`` header.
 
     If *api_key* is empty the middleware is a no-op (all requests pass through).
+    Only protects the ``/mcp`` endpoint; other paths (e.g. OAuth discovery
+    endpoints like ``/.well-known/*``) are passed through unguarded.
     """
 
     def __init__(self, app: ASGIApp, *, api_key: str) -> None:
@@ -21,6 +23,12 @@ class BearerAuthMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or not self._api_key:
+            await self.app(scope, receive, send)
+            return
+
+        # Only guard the MCP endpoint itself
+        path = scope.get("path", "")
+        if path != "/mcp":
             await self.app(scope, receive, send)
             return
 
