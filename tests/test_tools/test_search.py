@@ -54,7 +54,7 @@ class TestSearchPostsByHashtag:
         ctx = _make_ctx(fetcher)
 
         await search_posts_by_hashtag("#python", ctx=ctx)
-        fetcher.get_hashtag_posts.assert_awaited_once_with("python", count=25)
+        fetcher.get_hashtag_posts.assert_awaited_once_with("python", count=12)
 
     async def test_sort_by_engagement_rate(self):
         posts = [_make_post(like_count=10), _make_post(like_count=1000)]

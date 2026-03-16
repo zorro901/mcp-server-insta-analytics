@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from mcp_insta_analytics.config import Settings
-from mcp_insta_analytics.errors import AuthenticationError, FetcherError
+from mcp_insta_analytics.errors import AuthenticationError, CooldownActiveError, FetcherError
 from mcp_insta_analytics.models import Comment, Post, UserProfile
 
 from .base import AbstractFetcher
@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 # enough to avoid duplicate requests within a single tool invocation chain.
 _PROFILE_CACHE_TTL = 120
 _RAW_POST_CACHE_TTL = 120
+
+# How long to pause all requests after receiving a 403 (seconds).
+_COOLDOWN_DURATION = 900  # 15 minutes
 
 
 _SESSION_RECOVERY = (
@@ -48,6 +51,12 @@ def _is_auth_error(exc: Exception) -> bool:
     return False
 
 
+def _is_rate_limited(exc: Exception) -> bool:
+    """Return True if *exc* indicates a 403 rate-limit from Instagram."""
+    msg = str(exc).lower()
+    return "403" in msg or "forbidden" in msg
+
+
 class InstaLoaderFetcher(AbstractFetcher):
     """Fetcher that uses instaloader to interact with Instagram.
 
@@ -63,6 +72,8 @@ class InstaLoaderFetcher(AbstractFetcher):
         # In-memory caches: {key: (value, expiry_timestamp)}
         self._profile_cache: dict[str, tuple[Any, float]] = {}
         self._raw_post_cache: dict[str, tuple[Any, float]] = {}
+        # Cooldown: timestamp until which all requests are blocked
+        self._cooldown_until: float = 0.0
 
     async def initialize(self) -> None:
         """Initialize instaloader and optionally log in."""
@@ -131,7 +142,23 @@ class InstaLoaderFetcher(AbstractFetcher):
 
         self._initialized = True
 
+    def _check_cooldown(self) -> None:
+        """Raise CooldownActiveError if a 403-triggered cooldown is active."""
+        remaining = self._cooldown_until - time.monotonic()
+        if remaining > 0:
+            raise CooldownActiveError(remaining_seconds=int(remaining))
+
+    def _trigger_cooldown(self) -> None:
+        """Activate cooldown after receiving a 403 from Instagram."""
+        self._cooldown_until = time.monotonic() + _COOLDOWN_DURATION
+        minutes = _COOLDOWN_DURATION // 60
+        logger.warning(
+            "Instagram returned 403 — entering %d-minute cooldown to protect account",
+            minutes,
+        )
+
     async def _ensure_initialized(self) -> None:
+        self._check_cooldown()
         if not self._initialized:
             await self.initialize()
 
@@ -139,7 +166,7 @@ class InstaLoaderFetcher(AbstractFetcher):
         assert self._loader is not None, "InstaLoaderFetcher not initialized"
         return self._loader
 
-    async def _run_sync(self, func: partial[Any], timeout: float = 60.0) -> Any:
+    async def _run_sync(self, func: partial[Any], timeout: float = 30.0) -> Any:
         """Run a blocking instaloader call in an executor with timeout."""
         loop = asyncio.get_event_loop()
         return await asyncio.wait_for(
@@ -200,7 +227,7 @@ class InstaLoaderFetcher(AbstractFetcher):
         try:
             profile = await self._get_profile(username)
             return self._to_user_profile(profile)
-        except (AuthenticationError, FetcherError):
+        except (AuthenticationError, CooldownActiveError, FetcherError):
             raise
         except Exception as exc:
             if _is_auth_error(exc):
@@ -208,6 +235,8 @@ class InstaLoaderFetcher(AbstractFetcher):
                     f"Authentication failed while fetching profile for @{username} ({exc})",
                     recovery=_SESSION_RECOVERY,
                 ) from exc
+            if _is_rate_limited(exc):
+                self._trigger_cooldown()
             raise FetcherError(f"Failed to fetch profile for @{username}: {exc}") from exc
 
     async def get_user_posts(self, username: str, count: int = 20) -> list[Post]:
@@ -249,7 +278,7 @@ class InstaLoaderFetcher(AbstractFetcher):
                         f"Timed out fetching posts for @{username}"
                     )
             return collected
-        except (AuthenticationError, FetcherError):
+        except (AuthenticationError, CooldownActiveError, FetcherError):
             raise
         except Exception as exc:
             if _is_auth_error(exc):
@@ -257,6 +286,8 @@ class InstaLoaderFetcher(AbstractFetcher):
                     f"Authentication failed while fetching posts for @{username} ({exc})",
                     recovery=_SESSION_RECOVERY,
                 ) from exc
+            if _is_rate_limited(exc):
+                self._trigger_cooldown()
             raise FetcherError(f"Failed to fetch posts for @{username}: {exc}") from exc
 
     async def get_post_detail(self, shortcode: str) -> Post:
@@ -265,7 +296,7 @@ class InstaLoaderFetcher(AbstractFetcher):
             post = await self._get_raw_post(shortcode)
             owner = getattr(post, "owner_username", "") or ""
             return self._to_post(post, owner)
-        except (AuthenticationError, FetcherError):
+        except (AuthenticationError, CooldownActiveError, FetcherError):
             raise
         except Exception as exc:
             if _is_auth_error(exc):
@@ -273,6 +304,8 @@ class InstaLoaderFetcher(AbstractFetcher):
                     f"Authentication failed while fetching post {shortcode} ({exc})",
                     recovery=_SESSION_RECOVERY,
                 ) from exc
+            if _is_rate_limited(exc):
+                self._trigger_cooldown()
             raise FetcherError(f"Failed to fetch post {shortcode}: {exc}") from exc
 
     async def get_post_comments(self, shortcode: str, count: int = 50) -> list[Comment]:
@@ -301,7 +334,7 @@ class InstaLoaderFetcher(AbstractFetcher):
                 return collected
 
             return await self._run_sync(partial(_collect_comments))
-        except (AuthenticationError, FetcherError):
+        except (AuthenticationError, CooldownActiveError, FetcherError):
             raise
         except Exception as exc:
             if _is_auth_error(exc):
@@ -309,6 +342,8 @@ class InstaLoaderFetcher(AbstractFetcher):
                     f"Authentication failed while fetching comments for {shortcode} ({exc})",
                     recovery=_SESSION_RECOVERY,
                 ) from exc
+            if _is_rate_limited(exc):
+                self._trigger_cooldown()
             raise FetcherError(
                 f"Failed to fetch comments for {shortcode}: {exc}"
             ) from exc
@@ -338,7 +373,7 @@ class InstaLoaderFetcher(AbstractFetcher):
                 return collected
 
             return await self._run_sync(partial(_collect_hashtag_posts))
-        except (AuthenticationError, FetcherError):
+        except (AuthenticationError, CooldownActiveError, FetcherError):
             raise
         except Exception as exc:
             if _is_auth_error(exc):
@@ -346,6 +381,8 @@ class InstaLoaderFetcher(AbstractFetcher):
                     f"Authentication failed while fetching hashtag #{tag} ({exc})",
                     recovery=_SESSION_RECOVERY,
                 ) from exc
+            if _is_rate_limited(exc):
+                self._trigger_cooldown()
             raise FetcherError(f"Failed to fetch hashtag #{tag}: {exc}") from exc
 
     async def close(self) -> None:

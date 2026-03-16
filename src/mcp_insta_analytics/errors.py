@@ -54,6 +54,20 @@ class BudgetExhaustedError(InstaAnalyticsError):
         )
 
 
+class CooldownActiveError(InstaAnalyticsError):
+    """Instagram returned 403 — all requests are paused to protect the account."""
+
+    def __init__(self, remaining_seconds: int):
+        self.remaining_seconds = remaining_seconds
+        minutes = remaining_seconds // 60
+        super().__init__(
+            f"Cooldown active: Instagram rate-limited this session. "
+            f"All requests paused for {minutes}m {remaining_seconds % 60}s.",
+            recovery=f"Wait {minutes} minutes before retrying. "
+            "Frequent 403 errors may indicate the session cookie needs refreshing.",
+        )
+
+
 class FetcherError(InstaAnalyticsError):
     """Error during data fetching."""
 

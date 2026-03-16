@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 async def search_posts_by_hashtag(
     hashtag: str,
-    max_results: int = 25,
+    max_results: int = 12,
     sort_order: str = "relevancy",
     *,
     ctx: Context,
@@ -60,7 +60,7 @@ async def track_hashtag_trend(
     hashtag: str,
     ctx: Context,
     days_back: int = 7,
-    sample_size: int = 50,
+    sample_size: int = 15,
 ) -> HashtagPerformanceResult:
     """Track the performance of a hashtag over a recent time window."""
     deps = extract_deps(ctx)
